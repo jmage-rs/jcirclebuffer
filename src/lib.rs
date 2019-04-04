@@ -165,7 +165,7 @@ where
     }
 
     #[cfg(feature = "std")]
-    /// Allows a contiguous view of potentially non-contiguous underlying data. MAY INCUR A COPY. Should only incur copies rarely if the size of the buffer is large relative to the possible message size.
+    /// Allows a contiguous view of potentially non-contiguous underlying data. MAY INCUR A COPY. Should only incur copies rarely if the size of the buffer is large relative to the possible message size. Requires feature "std".
     pub fn view<R>(&self, amt: usize, callback: impl FnOnce(&[u8]) -> R) -> R {
         let (head, tail) = self.view_parts(amt);
         if tail.is_empty() {
@@ -175,6 +175,21 @@ where
         view_buffer[..head.len()].copy_from_slice(head);
         view_buffer[head.len()..].copy_from_slice(tail);
         callback(&view_buffer)
+    }
+
+    /// Allows a contgious view of potentially non-contiguous data using a user-provided buffer. May incur a copy but will not incur a heap allocation. Available without feature "std".
+    pub fn view_provided<C, R>(&self, buf: &mut [u8], callback: C) -> R
+    where
+        C: FnOnce(&[u8]) -> R,
+    {
+        let amt = buf.len();
+        let (head, tail) = self.view_parts(amt);
+        if tail.is_empty() {
+            return callback(head);
+        }
+        buf[..head.len()].copy_from_slice(head);
+        buf[head.len()..].copy_from_slice(tail);
+        callback(buf)
     }
 
     /// View potentially non-contiguous data. Will never incur a copy. Returns (head, tail). All the data will be in the head unless data crosses the wrap point.
@@ -232,8 +247,32 @@ mod tests {
     use super::CircleBuffer;
     #[test]
     fn circle_buffer_tests() {
-        let mut circle_buffer = CircleBuffer::default();
-        circle_buffer.fill(5);
-        assert!(circle_buffer.view_nocopy().len() == 5);
+        let mut read = std::io::Cursor::new(b"abcdefghijklmnopqrstuvwxyz");
+        let mut circle_buffer = CircleBuffer::new([0u8; 4]);
+        assert!(circle_buffer.is_empty());
+        let read_size = circle_buffer.read(&mut read).unwrap();
+        assert_eq!(read_size, 4);
+        assert_eq!(circle_buffer.len(), read_size);
+        assert_eq!(circle_buffer.view_nocopy(), b"abcd");
+        assert_eq!(circle_buffer.view_parts(4), (&b"abcd"[..], &b""[..]));
+        assert!(circle_buffer.is_full());
+        assert!(circle_buffer.get_fillable_area().is_none());
+        circle_buffer.view(4, |data| assert_eq!(data, b"abcd"));
+        let mut view_buf = [0u8; 4];
+        circle_buffer.view_provided(&mut view_buf, |data| assert_eq!(data, b"abcd"));
+
+        circle_buffer.consume(2);
+        assert_eq!(circle_buffer.view_nocopy(), b"cd");
+        let read_size = circle_buffer.read(&mut read).unwrap();
+        assert_eq!(read_size, 2);
+        assert_eq!(circle_buffer.view_parts(4), (&b"cd"[..], &b"ef"[..]));
+        circle_buffer.view(4, |data| assert_eq!(data, b"cdef"));
+        let mut view_buf = [0u8; 4];
+        circle_buffer.view_provided(&mut view_buf[..], |data| assert_eq!(data, b"cdef"));
+        assert_eq!(circle_buffer.view_nocopy(), b"cd");
+        circle_buffer.consume(4);
+
+        let mut big_buffer = CircleBuffer::default();
+        assert_eq!(big_buffer.read(&mut read).unwrap(), 20);
     }
 }
