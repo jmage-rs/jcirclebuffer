@@ -72,6 +72,8 @@
 //! # use jcirclebuffer::CircleBuffer;
 //! CircleBuffer::new([0; 4]); // Does not require feature "std"
 //! ```
+
+/// A circle buffer based on an unmoving underlying buffer.
 pub struct CircleBuffer<T> {
     start: usize,
     len: usize,
@@ -80,6 +82,7 @@ pub struct CircleBuffer<T> {
 
 #[cfg(feature = "std")]
 impl Default for CircleBuffer<Vec<u8>> {
+    /// An easy way to get a heap allocated circle buffer. Backed by a 1MiB [std::vec::Vec]. Requires "std".
     fn default() -> Self {
         CircleBuffer::with_size(1_048_576) // 1MiB
     }
@@ -87,6 +90,7 @@ impl Default for CircleBuffer<Vec<u8>> {
 
 #[cfg(feature = "std")]
 impl CircleBuffer<Vec<u8>> {
+    /// Request a heap allocated circle buffer of a certain size. Requires "std".
     pub fn with_size(size: usize) -> Self {
         let buf = vec![0; size];
         CircleBuffer {
@@ -101,6 +105,7 @@ impl<T> CircleBuffer<T>
 where
     T: AsRef<[u8]> + AsMut<[u8]>,
 {
+    /// Make a circle buffer backed by a user-provided buffer. This can be used to make a stack allocated circle buffer.
     pub fn new(buf: T) -> CircleBuffer<T> {
         CircleBuffer {
             start: 0,
@@ -109,28 +114,58 @@ where
         }
     }
 
+    /// Request the size of the underlying buffer. Doesn't change for the life of the circle buffer.
     pub fn size(&self) -> usize {
         self.buf.as_ref().len()
     }
 
+    /// Indicate that a certain amount of the buffer has been filled with meaningful content.
+    /// Almost always used as:
+    /// ```
+    /// # use jcirclebuffer::CircleBuffer;
+    /// # let mut my_buf = CircleBuffer::default();
+    /// # let mut something = std::io::Cursor::new(b"banana");
+    /// let read_zone = my_buf.get_fillable_area().unwrap();
+    /// let read_amount = std::io::Read::read(&mut something, read_zone).unwrap();
+    /// my_buf.fill(read_amount);
+    /// ```
     pub fn fill(&mut self, amt: usize) {
         self.len = self.len.checked_add(amt).unwrap();
         assert!(self.len <= self.size());
     }
 
+    #[cfg(feature = "std")]
+    /// A convenience wrapper around get_fillable_area() -> Read::read() -> buf.fill(amt).
+    /// Doesn't fill() if Read::read returns an error.
+    pub fn read<U>(&mut self, reader: &mut U) -> std::io::Result<usize>
+    where
+        U: std::io::Read,
+    {
+        let read_zone = self.get_fillable_area().expect("read buffer full");
+        let result = std::io::Read::read(reader, read_zone);
+        if let Ok(amt) = result {
+            self.fill(amt);
+        }
+        result
+    }
+
+    /// The current amount of meaningful data in the buffer. fill() makes this go up, consume() makes it go down.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// len() == 0
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// len() == size()
     pub fn is_full(&self) -> bool {
         self.len == self.size()
     }
 
     #[cfg(feature = "std")]
+    /// Allows a contiguous view of potentially non-contiguous underlying data. MAY INCUR A COPY. Should only incur copies rarely if the size of the buffer is large relative to the possible message size.
     pub fn view<R>(&self, amt: usize, callback: impl FnOnce(&[u8]) -> R) -> R {
         let (head, tail) = self.view_parts(amt);
         if tail.is_empty() {
@@ -142,6 +177,7 @@ where
         callback(&view_buffer)
     }
 
+    /// View potentially non-contiguous data. Will never incur a copy. Returns (head, tail). All the data will be in the head unless data crosses the wrap point.
     pub fn view_parts(&self, amt: usize) -> (&[u8], &[u8]) {
         assert!(amt <= self.len);
         let start = self.start;
@@ -155,6 +191,7 @@ where
         return (data_head, data_tail);
     }
 
+    /// Returns the maximum amount of meaningful contiguous data. Will never incur a copy.
     pub fn view_nocopy(&self) -> &[u8] {
         let mut view_end = self.start.checked_add(self.len).unwrap();
         if view_end > self.size() {
@@ -163,6 +200,7 @@ where
         &self.buf.as_ref()[self.start..view_end]
     }
 
+    /// Marks data as consumed. Advances the "start" cursor by amt. If this results in the buffer being empty, moves the start cursor to 0. Does not touch the underlying buffer.
     pub fn consume(&mut self, amt: usize) {
         self.len = self.len.checked_sub(amt).unwrap();
         if self.len == 0 {
@@ -172,6 +210,8 @@ where
         }
     }
 
+    /// Returns the next contiguous unused area in the underlying buffer. Returns None if the buffer is full.
+    /// There are potentially two separate contiguous unused areas in the buffer at any one time. If you use up one of them (and call fill()) then you will be able to get to the other one.
     pub fn get_fillable_area(&mut self) -> Option<&mut [u8]> {
         if self.len == self.size() {
             return None;
