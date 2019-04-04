@@ -1,4 +1,4 @@
-A circle buffer for use with std::io::Read/
+A circle buffer for use with std::io::Read
 
 ```
 use jcirclebuffer::CircleBuffer;
@@ -17,7 +17,7 @@ assert_eq!(my_buf.view_nocopy(), b"nana");
 ```
 
 The buffer is implemented as single unmoving memory buffer that keeps track of the "start"
-point and occupied length. [CircleBuffer::get_fillable_area] will return the current
+point and occupied length. CircleBuffer::get_fillable_area will return the current
 _contiguous_ fillable area. Depending on the location of the "wrap point" (the end of the
 underlying buffer) it may be appropriate to fill the entire fillable area, then immediately
 request a new fillable area without consuming any data.
