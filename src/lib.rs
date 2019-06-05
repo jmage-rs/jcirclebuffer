@@ -207,7 +207,7 @@ where
         callback(buf)
     }
 
-    /// view_provided but mut
+    /// view_provided but mut. Changes made to the view slice will be reflected in the only the circlebuffer buffer the view did not cross a wrap point and will be reflected in only in the provided buffer if the view did cross a wrap point.
     pub fn view_provided_mut<C, R>(&mut self, buf: &mut [u8], callback: C) -> R
     where
         C: FnOnce(&mut [u8]) -> R,
