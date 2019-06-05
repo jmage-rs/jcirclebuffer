@@ -149,6 +149,21 @@ where
         result
     }
 
+    /// Copy data into the circle buffer, possibly crossing the wrap point. Does fill() automatically. Panics if capacity is not available.
+    pub fn extend(&mut self, data: &[u8]) {
+        let head = self.get_fillable_area().unwrap();
+        let head_amt = core::cmp::min(data.len(), head.len());
+        head[..head_amt].copy_from_slice(&data[..head_amt]);
+        self.fill(head_amt);
+        if head_amt == data.len() {
+            return;
+        }
+        let tail = self.get_fillable_area().unwrap();
+        let remainder = data.len().checked_sub(head_amt).unwrap();
+        tail[..remainder].copy_from_slice(&data[head_amt..]);
+        self.fill(remainder);
+    }
+
     /// The current amount of meaningful data in the buffer. fill() makes this go up, consume() makes it go down.
     pub fn len(&self) -> usize {
         self.len
@@ -192,6 +207,21 @@ where
         callback(buf)
     }
 
+    /// view_provided but mut
+    pub fn view_provided_mut<C, R>(&mut self, buf: &mut [u8], callback: C) -> R
+    where
+        C: FnOnce(&mut [u8]) -> R,
+    {
+        let amt = buf.len();
+        let (head, tail) = self.view_parts_mut(amt);
+        if tail.is_empty() {
+            return callback(head);
+        }
+        buf[..head.len()].copy_from_slice(head);
+        buf[head.len()..].copy_from_slice(tail);
+        callback(buf)
+    }
+
     /// View potentially non-contiguous data. Will never incur a copy. Returns (head, tail). All the data will be in the head unless data crosses the wrap point.
     pub fn view_parts(&self, amt: usize) -> (&[u8], &[u8]) {
         assert!(amt <= self.len);
@@ -203,6 +233,21 @@ where
         let buf = self.buf.as_ref();
         let (left, data_head) = buf.split_at(start);
         let (data_tail, _) = left.split_at(view_end % self.size());
+        return (data_head, data_tail);
+    }
+
+    /// view_parts but mutable.
+    pub fn view_parts_mut(&mut self, amt: usize) -> (&mut [u8], &mut [u8]) {
+        assert!(amt <= self.len);
+        let start = self.start;
+        let view_end = start.checked_add(amt).unwrap();
+        if view_end <= self.size() {
+            return (&mut self.buf.as_mut()[start..view_end], &mut []);
+        }
+        let remainder: usize = view_end % self.size();
+        let buf = self.buf.as_mut();
+        let (left, data_head) = buf.split_at_mut(start);
+        let (data_tail, _) = left.split_at_mut(remainder);
         return (data_head, data_tail);
     }
 
@@ -274,5 +319,9 @@ mod tests {
 
         let mut big_buffer = CircleBuffer::default();
         assert_eq!(big_buffer.read(&mut read).unwrap(), 20);
+
+        big_buffer.extend(b"banana");
+        big_buffer.consume(20);
+        big_buffer.view(6, |x| assert_eq!(x, b"banana"));
     }
 }
