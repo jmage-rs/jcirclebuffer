@@ -169,6 +169,11 @@ where
         self.len
     }
 
+    /// The total amount of free space available for filling.
+    pub fn available(&self) -> usize {
+        self.size() - self.len()
+    }
+
     /// len() == 0
     pub fn is_empty(&self) -> bool {
         self.len == 0
@@ -287,6 +292,39 @@ where
     }
 }
 
+impl<T> std::io::Write for CircleBuffer<T>
+where
+    T: AsRef<[u8]> + AsMut<[u8]>,
+{
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let available = self.available();
+        if available == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Full"));
+        }
+        let amt = std::cmp::min(data.len(), available);
+        self.extend(&data[..amt]);
+        Ok(amt)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<T> std::io::Read for CircleBuffer<T>
+where
+    T: AsRef<[u8]> + AsMut<[u8]>,
+{
+    fn read(&mut self, dest: &mut [u8]) -> std::io::Result<usize> {
+        let amt = std::cmp::min(self.len(), dest.len());
+        let parts = self.view_parts(amt);
+        dest[..parts.0.len()].copy_from_slice(parts.0);
+        dest[parts.0.len()..amt].copy_from_slice(parts.1);
+        self.consume(amt);
+        Ok(amt)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::CircleBuffer;
@@ -323,5 +361,15 @@ mod tests {
         big_buffer.extend(b"banana");
         big_buffer.consume(20);
         big_buffer.view(6, |x| assert_eq!(x, b"banana"));
+
+        let mut buffer = CircleBuffer::new([0u8; 4]);
+        buffer.extend(b"abcd");
+        buffer.consume(2);
+        buffer.extend(b"ef");
+        let mut read_buf = [0u8; 3];
+        let result = std::io::Read::read(&mut buffer, &mut read_buf).unwrap();
+        assert_eq!(result, 3);
+        assert_eq!(b"cde", &read_buf);
+        assert_eq!(buffer.len(), 1);
     }
 }
