@@ -169,6 +169,12 @@ where
         self.len
     }
 
+    /// Discard all information in the buffer and realign at the start point. This is a cheap operation that makes no modification to the underlying buffer.
+    pub fn clear(&mut self) {
+        self.len = 0;
+        self.start = 0;
+    }
+
     /// The total amount of free space available for filling.
     pub fn available(&self) -> usize {
         self.size() - self.len()
